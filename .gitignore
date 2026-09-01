@@ -1,0 +1,30 @@
+# Build and release output
+bin/
+obj/
+publish/
+artifacts/
+dist/
+*.exe
+*.pdb
+*.zip
+SHA256SUMS.txt
+
+# Legacy local packaging experiments (contain machine-specific state)
+installer/
+release-source/
+
+# Design-source artwork not required by the application
+Assets/model-peek-source.png
+
+# IDE and user settings
+.vs/
+.idea/
+*.suo
+*.user
+*.userosscache
+*.sln.docstates
+
+# OS files
+Thumbs.db
+Desktop.ini
+.DS_Store

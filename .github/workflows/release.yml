@@ -1,0 +1,106 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+  id-token: write
+  attestations: write
+  artifact-metadata: write
+
+env:
+  DOTNET_CLI_TELEMETRY_OPTOUT: '1'
+  DOTNET_NOLOGO: '1'
+
+jobs:
+  release:
+    runs-on: windows-latest
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Set up .NET 10
+        uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Scan tracked files for private data
+        shell: pwsh
+        run: ./scripts/Test-Privacy.ps1
+
+      - name: Verify tag matches project version
+        shell: pwsh
+        run: |
+          [xml] $project = Get-Content ./ModelPeek.csproj
+          $version = $project.Project.PropertyGroup.Version | Select-Object -First 1
+          $tagVersion = $env:GITHUB_REF_NAME.TrimStart('v')
+          if ($version -ne $tagVersion) {
+            throw "Tag version $tagVersion does not match project version $version."
+          }
+
+      - name: Restore and publish portable EXE
+        shell: pwsh
+        run: |
+          dotnet restore ./ModelPeek.csproj
+          dotnet publish ./ModelPeek.csproj -c Release -r win-x64 --self-contained true --no-restore -o ./dist/publish
+          Copy-Item -LiteralPath ./dist/publish/ModelPeek.exe -Destination ./dist/ModelPeek.exe
+          $dotnetRoot = Split-Path (Get-Command dotnet).Source -Parent
+          Copy-Item -LiteralPath (Join-Path $dotnetRoot 'LICENSE.txt') -Destination ./dist/DOTNET-LICENSE.txt
+          Copy-Item -LiteralPath (Join-Path $dotnetRoot 'ThirdPartyNotices.txt') -Destination ./dist/DOTNET-THIRD-PARTY-NOTICES.txt
+
+      - name: Verify metadata, privacy, and STL behavior
+        shell: pwsh
+        run: ./scripts/Test-Release.ps1 -ExecutablePath ./dist/ModelPeek.exe
+
+      - name: Create release files and checksums
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Path ./dist/package | Out-Null
+          Copy-Item -LiteralPath ./dist/ModelPeek.exe -Destination ./dist/package/ModelPeek.exe
+          Copy-Item -LiteralPath ./LICENSE -Destination ./dist/package/LICENSE.txt
+          Copy-Item -LiteralPath ./PRIVACY.md -Destination ./dist/package/PRIVACY.md
+          Copy-Item -LiteralPath ./THIRD-PARTY-NOTICES.md -Destination ./dist/package/THIRD-PARTY-NOTICES.md
+          Copy-Item -LiteralPath ./dist/DOTNET-LICENSE.txt -Destination ./dist/package/DOTNET-LICENSE.txt
+          Copy-Item -LiteralPath ./dist/DOTNET-THIRD-PARTY-NOTICES.txt -Destination ./dist/package/DOTNET-THIRD-PARTY-NOTICES.txt
+          Compress-Archive -Path ./dist/package/* -DestinationPath ./dist/ModelPeek-win-x64.zip
+          $files = @('./dist/ModelPeek.exe', './dist/ModelPeek-win-x64.zip')
+          $lines = foreach ($file in $files) {
+            $hash = Get-FileHash -LiteralPath $file -Algorithm SHA256
+            '{0}  {1}' -f $hash.Hash.ToLowerInvariant(), (Split-Path $file -Leaf)
+          }
+          $lines | Set-Content -LiteralPath ./dist/SHA256SUMS.txt -Encoding utf8NoBOM
+
+      - name: Attest EXE and ZIP provenance
+        uses: actions/attest@508db95dd578ae2727ebd6217d5ba78e4fbda05d # v4.2.1
+        with:
+          subject-path: |
+            dist/ModelPeek.exe
+            dist/ModelPeek-win-x64.zip
+
+      - name: Create draft release and upload assets
+        shell: pwsh
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          $tag = $env:GITHUB_REF_NAME
+          @"
+          Model Peek is a portable, self-contained, read-only STL viewer for 64-bit Windows.
+
+          > **Unsigned preview:** This release is not Authenticode-signed, so Windows may identify the publisher as unknown. Download it only from this repository and verify the SHA-256 checksum or GitHub build-provenance attestation.
+
+          - Download `ModelPeek.exe` to run the application directly.
+          - Download `ModelPeek-win-x64.zip` for the executable plus license, privacy, and third-party notices.
+          - Use `SHA256SUMS.txt` to verify file integrity.
+
+          Model Peek has no telemetry, analytics, advertising, account system, automatic updater, or network feature. STL processing remains on the local computer.
+          "@ | Set-Content -LiteralPath ./dist/RELEASE-NOTES.md -Encoding utf8NoBOM
+          gh release create $tag --verify-tag --draft --notes-file ./dist/RELEASE-NOTES.md --title "Model Peek $tag"
+          gh release upload $tag `
+            'dist/ModelPeek.exe#Portable Windows x64 executable' `
+            'dist/ModelPeek-win-x64.zip#Portable Windows x64 ZIP' `
+            'dist/SHA256SUMS.txt#SHA-256 checksums'
+          gh release edit $tag --draft=false

@@ -1,0 +1,7 @@
+solid broken
+  facet normal 0 0 1
+    outer loop
+      vertex this is not valid
+    endloop
+  endfacet
+endsolid broken
