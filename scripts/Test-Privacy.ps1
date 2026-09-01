@@ -74,4 +74,7 @@ if ($violations.Count -gt 0) {
     throw "Privacy scan failed. Review these tracked files without printing the matched values:`n$summary"
 }
 
+# An unset optional git identity returns exit code 1. That is normal on a clean
+# CI runner, but PowerShell can otherwise propagate it after this script passes.
+$global:LASTEXITCODE = 0
 Write-Output "Privacy scan passed for $($trackedFiles.Count) tracked files."
